@@ -9,11 +9,12 @@ import subprocess
 import git
 from typing import Dict, List
 # import python_gitlab  # 실제 사용시 필요
+from contextlib import asynccontextmanager
 
 # --- 기본 Repo/Branch 정보 ---
 DEFAULT_REPO_URL = "https://gitlab.com/xxx/yyy.git"  # 실제 사용시 수정
 DEFAULT_BRANCH = "main"
-REPO_LOCAL_ROOT = os.path.expanduser("~/terraform")
+REPO_LOCAL_ROOT = os.path.expanduser("./agents/terraform")
 
 
 # --- MCP Sequential Thinking 서버 연결 ---
@@ -131,8 +132,19 @@ def is_new_task(user_input: str) -> bool:
     keywords = ["새로", "추가", "만들", "생성", "삭제", "초기화"]
     return any(k in user_input for k in keywords)
 
-# --- FastAPI 서버 ---
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 서버 시작 시 실행
+    await mcp_server_sequential_thinking.connect()
+    await mcp_server_terraform.connect()
+    await filesystem_mcp_server.connect()
+    yield
+    # 서버 종료 시 실행 (필요하다면)
+    await mcp_server_sequential_thinking.cleanup()
+    await mcp_server_terraform.cleanup()
+    await filesystem_mcp_server.cleanup()
+
+app = FastAPI(lifespan=lifespan)
 
 class CommandRequest(BaseModel):
     user_id: str  # 사용자 식별자(세션/토큰 등)
@@ -145,7 +157,7 @@ async def terraform_agent(req: CommandRequest):
     if is_new_task(req.user_input):
         history = []  # history 초기화
     # history + user_input을 Agent에 전달
-    result = await Runner.run(agent, req.user_input, history=history)
+    result = await Runner.run(agent, req.user_input)
     # history에 user/agent 발화 추가
     history.append({"role": "user", "content": req.user_input})
     history.append({"role": "agent", "content": result.final_output})
